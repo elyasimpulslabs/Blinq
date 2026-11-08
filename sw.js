@@ -1,5 +1,5 @@
 // Blinq Service Worker: App startet auch ohne Internet. Neue Versionen werden beim nächsten Öffnen geladen.
-const CACHE = "blinq-v1";
+const CACHE = "blinq-v2";
 const FILES = ["./", "index.html", "manifest.webmanifest", "icons/apple-touch-icon.png", "icons/icon-192.png", "icons/icon-512.png"];
 
 self.addEventListener("install", e => {

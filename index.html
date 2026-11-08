@@ -43,7 +43,7 @@ button, input, select { font: inherit; color: inherit; }
 button { background: none; border: 0; cursor: pointer; padding: 0; }
 button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 button:disabled { opacity: .4; cursor: default; }
-.app { height: 100%; padding-top: env(safe-area-inset-top, 0px); max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; background: var(--bg); position: relative; }
+.app { position: fixed; top: 0; bottom: 0; left: 0; right: 0; padding-top: env(safe-area-inset-top, 0px); max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; background: var(--bg); }
 @media (min-width: 600px) { .app { border-inline: 1px solid var(--line); } }
 
 .top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 10px;
