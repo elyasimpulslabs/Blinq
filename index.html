@@ -173,6 +173,11 @@ select { background: var(--card); border: 0; border-radius: 9px; padding: 8px 10
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 .part { display: flex; align-items: center; gap: 10px; background: var(--card); border-radius: 11px; padding: 10px 12px; }
+.undo { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(80px + env(safe-area-inset-bottom, 0px)); z-index: 45;
+  width: min(440px, calc(100% - 32px)); display: flex; align-items: center; gap: 12px; background: #fff; color: #000; border-radius: 12px;
+  padding: 10px 10px 10px 14px; box-shadow: 0 10px 30px rgba(0,0,0,.5); font-size: 14px; font-weight: 500; }
+.undo span { flex: 1; } .undo button { background: #000; color: #fff; border-radius: 9px; padding: 8px 12px; font-weight: 600; font-size: 13.5px; }
+.btn.danger { background: rgba(240,69,69,.16); color: #ff8a8a; }
 .part div { flex: 1; min-width: 0; font-size: 14px; } .part small { display: block; color: var(--muted); font-size: 12px; }
 .part .btn { padding: 9px 14px; font-size: 13.5px; }
 input.key { width: 100%; background: var(--card); border: 0; border-radius: 9px; padding: 10px; font-size: 14px; }
@@ -208,6 +213,7 @@ input.key { width: 100%; background: var(--card); border: 0; border-radius: 9px;
   <input type="file" id="picker" accept="image/*" multiple hidden>
   <div class="sheet" id="sheet" hidden><div class="inner" id="sheetInner"></div></div>
   <div class="toast" id="toast" role="status"></div>
+  <div class="undo" id="undo" hidden><span id="undoText"></span><button data-act="undo">Rückgängig</button></div>
 </div>
 
 <script>
@@ -579,6 +585,32 @@ async function clearAll(onlyRejected) {
   cull(); render(); toast(onlyRejected ? `${drop.length} aussortierte Fotos aus Blinq gelöscht.` : "Shooting geleert.");
 }
 
+// ---------- Alles löschen mit einem Tipp (6 Sekunden rückgängig machbar) ----------
+let pendingDelete = null;
+function deleteAll() {
+  if (!S.photos.length) return;
+  if (pendingDelete) finalizeDelete();
+  const removed = S.photos;
+  S.photos = []; S.sel = null; S.parts = []; S.filter = "keepers";
+  if (S.mainURL) { URL.revokeObjectURL(S.mainURL); S.mainURL = null; S.mainFor = null; }
+  cull(); render();
+  pendingDelete = { removed, timer: setTimeout(finalizeDelete, 6000) };
+  $("#undoText").textContent = `${removed.length} Fotos gelöscht`;
+  $("#undo").hidden = false;
+}
+async function finalizeDelete() {
+  const job = pendingDelete; if (!job) return;
+  pendingDelete = null; clearTimeout(job.timer); $("#undo").hidden = true;
+  for (const p of job.removed) { try { await DB.del("blobs", p.id); await DB.del("meta", p.id); } catch (e) {} p.blob = null; }
+  S.storageFull = false; render();
+}
+function undoDelete() {
+  const job = pendingDelete; if (!job) return;
+  pendingDelete = null; clearTimeout(job.timer); $("#undo").hidden = true;
+  S.photos = job.removed.concat(S.photos); cull(); render(); toast("Wiederhergestellt.", 1800);
+}
+document.addEventListener("visibilitychange", () => { if (document.hidden) finalizeDelete(); });
+
 // ---------- KI Prüfung (Claude schaut sich die Bilder an) ----------
 async function smallJPEG(p, side = 1024) {
   const blob = await blobOf(p); const { img, url } = await decode(blob);
@@ -873,7 +905,7 @@ function renderImport() {
     <div class="panel">
       <div class="row"><b style="font-size:15px">Shooting</b><span class="label" id="usage">${S.photos.length} Fotos</span></div>
       <label class="range" for="shootname">Name<input id="shootname" value="${esc(S.shoot)}" style="background:var(--card);border:0;border-radius:9px;padding:9px 10px"></label>
-      <div class="decide" style="grid-template-columns:1fr 1fr"><button class="btn" data-act="dropRejected" ${S.photos.length ? "" : "disabled"}>Aussortierte löschen</button><button class="btn" data-act="clear" ${S.photos.length ? "" : "disabled"}>Alles leeren</button></div>
+      <div class="decide" style="grid-template-columns:1fr 1fr"><button class="btn" data-act="dropRejected" ${S.photos.length ? "" : "disabled"}>Aussortierte löschen</button><button class="btn danger" data-act="deleteAll" ${S.photos.length ? "" : "disabled"}>Alle Fotos löschen</button></div>
       <p class="note">${DB.ok ? "Fotos bleiben in Blinq gespeichert, auch nach dem Schließen." : "Safari erlaubt hier keinen Speicher. Fotos bleiben nur, bis du Blinq schließt."}</p>
     </div></section>`;
   if (navigator.storage?.estimate) navigator.storage.estimate().then(e => { const u = $("#usage"); if (u && e.usage) u.textContent = `${S.photos.length} Fotos · ${(e.usage / 1e9).toFixed(2).replace(".", ",")} GB`; }).catch(() => {});
@@ -892,6 +924,9 @@ function renderExport() {
     <button class="dest" data-act="prepZip" ${keep && !S.busy ? "" : "disabled"}><span class="ic">ZIP</span><div>Auswahl als ZIP<small>Mit Ordnern Highlights und Auswahl, zum Sichern in Dateien</small></div><span class="chev">›</span></button>
     <div class="panel"><b style="font-size:15px">Dein Preset in Lightroom</b>
       <ol class="steps"><li>In Lightroom ein importiertes Foto mit deinem Preset bearbeiten.</li><li>Oben auf ⋯ und <b>Einstellungen kopieren</b>.</li><li>In der Übersicht alle neuen Fotos markieren und <b>Einstellungen einfügen</b>.</li></ol></div>
+    <h3>Fertig?</h3>
+    <button class="btn danger" data-act="deleteAll" ${S.photos.length && !S.busy ? "" : "disabled"}>Alle ${S.photos.length} Fotos aus Blinq löschen</button>
+    <p class="note">Gibt den Speicher sofort frei. 6 Sekunden lang kannst du es rückgängig machen.</p>
   </section>`;
 }
 function render() {
@@ -920,7 +955,7 @@ function openSettings() {
       <input class="key" id="apikey" type="password" autocomplete="off" placeholder="sk-ant-…" value="${esc(apiKey())}">
       <button class="btn" data-act="saveKey">Schlüssel speichern</button></div>
     <button class="btn" data-act="reset">Standard wiederherstellen</button>
-    <p class="note" style="text-align:center">Blinq Version 3</p>`;
+    <p class="note" style="text-align:center">Blinq Version 4</p>`;
   $("#sheet").hidden = false;
 }
 
@@ -962,6 +997,8 @@ document.addEventListener("click", async e => {
     case "clear": askConfirm(`Alle ${S.photos.length} Fotos aus Blinq löschen?`, () => clearAll(false)); break;
     case "closeSheet": $("#sheet").hidden = true; break;
     case "reset": S.settings = { ...DEFAULTS }; saveSettings(); cull(); render(); openSettings(); break;
+    case "deleteAll": deleteAll(); break;
+    case "undo": undoDelete(); break;
     case "confirmYes": $("#sheet").hidden = true; askConfirm.fn && askConfirm.fn(); break;
   }
 });
