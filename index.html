@@ -273,6 +273,10 @@ const DB = {
   get(store, key) { return this.tx(store, "readonly", s => s.get(key)); },
   del(store, key) { return this.tx(store, "readwrite", s => s.delete(key)); },
   clear(store) { return this.tx(store, "readwrite", s => s.clear()); },
+  // Viele Einträge in EINER Transaktion: schnell und ganz oder gar nicht, auch wenn iOS die App gleich einfriert.
+  delMany(store, keys) { return this.tx(store, "readwrite", s => { for (const k of keys) s.delete(k); }); },
+  putMany(store, entries) { return this.tx(store, "readwrite", s => { for (const [k, v] of entries) s.put(v, k); }); },
+  keys(store) { return this.tx(store, "readonly", s => s.getAllKeys()); },
   all(store) {
     return new Promise(res => {
       if (!this.ok) return res([]);
@@ -580,34 +584,50 @@ async function analyzeAll() {
 }
 async function clearAll(onlyRejected) {
   const drop = onlyRejected ? S.photos.filter(p => p.a && !isKeeper(p)) : S.photos.slice();
-  for (const p of drop) { try { await DB.del("blobs", p.id); await DB.del("meta", p.id); } catch (e) {} }
+  const ids = drop.map(p => p.id); for (const id of ids) dirty.delete(id);
+  try { await DB.delMany("meta", ids); await DB.delMany("blobs", ids); } catch (e) {}
   S.photos = S.photos.filter(p => !drop.includes(p)); S.sel = null; S.storageFull = false;
   cull(); render(); toast(onlyRejected ? `${drop.length} aussortierte Fotos aus Blinq gelöscht.` : "Shooting geleert.");
 }
 
 // ---------- Alles löschen mit einem Tipp (6 Sekunden rückgängig machbar) ----------
 let pendingDelete = null;
+// Die Liste (meta) wird SOFORT gelöscht, damit nach dem Schließen nichts zurückkommt.
+// Die Originale (blobs) erst nach 6 Sekunden, so lange geht Rückgängig.
 function deleteAll() {
   if (!S.photos.length) return;
   if (pendingDelete) finalizeDelete();
   const removed = S.photos;
+  const metas = removed.map(p => [p.id, metaOf(p)]);
+  for (const p of removed) dirty.delete(p.id);
   S.photos = []; S.sel = null; S.parts = []; S.filter = "keepers";
   if (S.mainURL) { URL.revokeObjectURL(S.mainURL); S.mainURL = null; S.mainFor = null; }
   cull(); render();
-  pendingDelete = { removed, timer: setTimeout(finalizeDelete, 6000) };
+  DB.delMany("meta", removed.map(p => p.id)).catch(() => DB.clear("meta").catch(() => {}));
+  pendingDelete = { removed, metas, timer: setTimeout(finalizeDelete, 6000) };
   $("#undoText").textContent = `${removed.length} Fotos gelöscht`;
   $("#undo").hidden = false;
 }
 async function finalizeDelete() {
   const job = pendingDelete; if (!job) return;
   pendingDelete = null; clearTimeout(job.timer); $("#undo").hidden = true;
-  for (const p of job.removed) { try { await DB.del("blobs", p.id); await DB.del("meta", p.id); } catch (e) {} p.blob = null; }
+  try { await DB.delMany("blobs", job.removed.map(p => p.id)); } catch (e) {}
+  for (const p of job.removed) p.blob = null;
   S.storageFull = false; render();
 }
-function undoDelete() {
+async function undoDelete() {
   const job = pendingDelete; if (!job) return;
   pendingDelete = null; clearTimeout(job.timer); $("#undo").hidden = true;
+  try { await DB.putMany("meta", job.metas); } catch (e) {}
   S.photos = job.removed.concat(S.photos); cull(); render(); toast("Wiederhergestellt.", 1800);
+}
+// Originale ohne Eintrag in der Liste (z. B. App beim Löschen geschlossen) beim Start aufräumen.
+async function cleanOrphans() {
+  try {
+    const known = new Set(S.photos.map(p => p.id));
+    const orphans = ((await DB.keys("blobs")) || []).filter(k => !known.has(k));
+    if (orphans.length) await DB.delMany("blobs", orphans);
+  } catch (e) {}
 }
 document.addEventListener("visibilitychange", () => { if (document.hidden) finalizeDelete(); });
 
@@ -955,7 +975,7 @@ function openSettings() {
       <input class="key" id="apikey" type="password" autocomplete="off" placeholder="sk-ant-…" value="${esc(apiKey())}">
       <button class="btn" data-act="saveKey">Schlüssel speichern</button></div>
     <button class="btn" data-act="reset">Standard wiederherstellen</button>
-    <p class="note" style="text-align:center">Blinq Version 4</p>`;
+    <p class="note" style="text-align:center">Blinq Version 5</p>`;
   $("#sheet").hidden = false;
 }
 
@@ -1053,6 +1073,7 @@ setTimeout(() => { const s = $("#splash"); if (s) s.remove(); }, 2300);
     const metas = await DB.all("meta");
     S.photos = metas.map(m => ({ ...m, blob: null }));
     cull(); render();
+    cleanOrphans();
     if (S.photos.some(p => !p.a)) analyzeAll();
   }
 })();
